@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 from torchvision.io import decode_image
 
 class ExperimentDataset(Dataset):
-    def __init__(self, rgb_dir, therm_dir, transform=None, target_transform=None, len=1000):
+    def __init__(self, rgb_dir, therm_dir, transform=None, target_transform=None, len=1):
         self.rgb_dir = rgb_dir
         self.therm_dir = therm_dir
         self.transform = transform
@@ -23,7 +23,6 @@ class ExperimentDataset(Dataset):
             rgbimage = self.transform(rgbimage)
         if self.target_transform:
             label = self.target_transform(label)
-        div = 1.0/255.0
         rgbimage = rgbimage.float()
         label = label.float()
-        return rgbimage, label.apply_(lambda num: num*div)
+        return rgbimage, label

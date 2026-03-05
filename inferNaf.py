@@ -1,14 +1,14 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from unet_model import UNet
+from nafnet.NAFNet_arch import NAFNet
 from ExperimentData import ExperimentDataset
 import cv2
 
 test_data = ExperimentDataset(
-"olddata\\tiny\\rgb",
-"olddata\\tiny\\therm",
-len=100
+"olddata\\dataset_1-6-2024\\class1",
+"olddata\\dataset_1-6-2024\\class2",
+len=17000
 )
 
 loader = DataLoader(test_data, batch_size=1, shuffle=True)
@@ -16,26 +16,32 @@ loader = DataLoader(test_data, batch_size=1, shuffle=True)
 device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
 print(f"Using {device} device")
 
-model = UNet(3, 1).to(device)
-model.load_state_dict(torch.load("model.pth", weights_only=True))
+model = NAFNet().to(device)
+model.load_state_dict(torch.load("naf.pth", weights_only=True))
 print(model)
 
 torch.no_grad()
 model.eval()
 
+def minmax(x):
+    min, max = x.min(), x.max()
+    return (x-min) / (max-min)
+
 rgb, therm = next(iter(loader))
 pred = model(rgb)
-pred = torch.reshape(pred, (1, 1, 32, 32))
 therm = therm.squeeze()
 pred = pred.squeeze()
-pred = F.sigmoid(pred)
-rgbim = cv2.resize(rgb[0][0].numpy()/255, (320, 320))
+pred = minmax(pred)
+rgbim = rgb[0][0].numpy()/255
 cv2.imshow("rgb", rgbim)
-thermim = cv2.resize(therm.numpy(), (320, 320))
+thermim = therm.numpy()
 cv2.imshow("therm", thermim)
-predim = cv2.resize(pred.detach().numpy(), (320, 320))
+predim = pred.detach().numpy()
+print(predim.dtype)
 cv2.imshow("pred", predim)
 cv2.waitKey(0)
-print(therm[0])
-print(pred[0])
+cv2.imwrite("sample\\naf.tiff", predim)
+
+
+
 

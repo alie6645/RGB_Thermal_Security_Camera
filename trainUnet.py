@@ -1,15 +1,20 @@
+import time
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from ExperimentData import ExperimentDataset
 import torchvision.transforms as transforms
-from unet_model import UNet
+from unet.unet_model import UNet
 
 data = ExperimentDataset(
-"olddata\\tiny\\rgb",
-"olddata\\tiny\\therm",
+"olddata\\dataset_1-6-2024\\class1",
+"olddata\\dataset_1-6-2024\\class2",
+len=10000
 )
-batchsize=50
+
+batchsize = 50
+epochs = 10
+
 loader = DataLoader(data, batch_size=batchsize, shuffle=True)
 
 for X, y in loader:
@@ -35,7 +40,6 @@ def train(dataloader, model, loss_fn, optimizer):
 
         # Compute prediction error
         pred = model(X)
-        pred = torch.reshape(pred, (batchsize, 1, 32, 32))
         loss = loss_fn(pred, y)
 
         # Backpropagation
@@ -47,11 +51,13 @@ def train(dataloader, model, loss_fn, optimizer):
             loss, current = loss.item(), (batch + 1) * len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
-epochs = 10
+start = time.time()
 for t in range(epochs):
     print(f"Epoch {t+1}\n-------------------------------")
     train(loader, model, loss_fn, optimizer)
 print("Done!")
+end = time.time()
+print("time elapsed: " + (end - start) + " s") 
 
 torch.save(model.state_dict(), "model.pth")
 print("Saved Model to model.pth")
