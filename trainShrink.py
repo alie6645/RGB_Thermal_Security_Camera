@@ -27,7 +27,7 @@ except:
     print("new model")
 print(model)
 
-loss_fn = nn.BCEWithLogitsLoss()
+loss_fn = nn.L1Loss()
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
 
 def train(dataloader, model, loss_fn, optimizer):

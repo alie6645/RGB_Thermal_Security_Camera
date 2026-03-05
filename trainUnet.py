@@ -29,7 +29,7 @@ model = UNet(3, 1).to(device)
 model.load_state_dict(torch.load("model.pth", weights_only=True))
 print(model)
 
-loss_fn = nn.BCEWithLogitsLoss()
+loss_fn = nn.L1Loss()
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
 
 def train(dataloader, model, loss_fn, optimizer):
