@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from unet.unet_model import UNet
@@ -30,8 +31,9 @@ def minmax(x):
     min, max = x.min(), x.max()
     return (x-min) / (max-min)
 
-def display(model, rgb, func, name):
+def display(model, rgb, therm, func, name):
     pred = model(rgb)
+    print(name + " loss: " + nn.MSELoss(pred, therm).item())
     pred = pred.squeeze()
     pred = func(pred)
     predim = pred.detach().numpy()
@@ -51,17 +53,17 @@ torch.no_grad()
 model = UNet(3, 1).to(device)
 model.eval()
 model.load_state_dict(torch.load("model.pth", weights_only=True))
-display(model, rgb, lambda x: x, "unet")
+display(model, rgb, therm, lambda x: x, "unet")
 
 model = ShrinkNet(3, 1).to(device)
 model.eval()
 model.load_state_dict(torch.load("shrink.pth", weights_only=True))
-display(model, big_rgb, lambda x: x, "shrinknet")
+display(model, big_rgb, therm, lambda x: x, "shrinknet")
 
 model = NAFNet().to("cpu")
 model.eval()
 model.load_state_dict(torch.load("naf.pth", weights_only=True))
-display(model, rgb, minmax, "nafnet")
+display(model, rgb, therm, minmax, "nafnet")
 
 therm = therm.squeeze()
 rgbim = rgb[0][0].numpy()/255
