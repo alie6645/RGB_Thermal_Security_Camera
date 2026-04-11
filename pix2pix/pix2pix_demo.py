@@ -7,9 +7,15 @@ import datetime
 from matplotlib import pyplot as plt
 from IPython import display
 
+print("TF version:", tf.__version__)
+print("Built with CUDA:", tf.test.is_built_with_cuda())
+print("Physical GPUs:", tf.config.list_physical_devices('GPU'))
+print("Logical GPUs:", tf.config.list_logical_devices('GPU'))
 dataset_name = "facades" #@param ["cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day"]
 
 _URL = f'http://efrosgans.eecs.berkeley.edu/pix2pix/datasets/{dataset_name}.tar.gz'
+
+
 
 path_result = pathlib.Path(tf.keras.utils.get_file(
     fname=f"{dataset_name}.tar.gz",

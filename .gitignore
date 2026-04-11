@@ -1,3 +1,6 @@
 dataset_1-6-2024/
 *.pth
 small/
+RGB Thermal Dataset/
+training_checkpoints/
+processed_768X432/
