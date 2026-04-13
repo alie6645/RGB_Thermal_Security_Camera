@@ -1,12 +1,25 @@
 import os
 from pathlib import Path
 import random
-import time
-
 import tensorflow as tf
 from tensorflow.keras import layers
+import time
 
 tf.config.optimizer.set_jit(False)
+
+def find_first_preview_pair_in_session(pairs, session_name):
+    matches = []
+
+    for rgb_path, thermal_path in pairs:
+        p = Path(rgb_path)
+        if p.parent.parent.name == session_name:
+            matches.append((rgb_path, thermal_path))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda x: Path(x[0]).parent.name)
+    return matches[0]
 
 # ============================================================
 # CONFIG
@@ -32,10 +45,8 @@ SAMPLE_DIR = "./samples_rgb_to_thermal_from_scratch_v2"
 AUTOTUNE = tf.data.AUTOTUNE
 SHUFFLE_PAIRS = True
 
-# Change this if you want a specific session for preview.
-# Set to None to use the first test sample.
 PREVIEW_SESSION = "session_20260317_201336"
-
+RESTORE_PATH = "./training_checkpoints_rgb_to_thermal/ckpt-7"
 
 # ============================================================
 # FILE DISCOVERY
@@ -59,25 +70,6 @@ def find_pairs(dataset_root: Path):
 
     return pairs
 
-
-def find_first_preview_pair_in_session(pairs, session_name):
-    if session_name is None:
-        return None
-
-    matches = []
-
-    for rgb_path, thermal_path in pairs:
-        p = Path(rgb_path)
-        if p.parent.parent.name == session_name:
-            matches.append((rgb_path, thermal_path))
-
-    if not matches:
-        return None
-
-    matches.sort(key=lambda x: Path(x[0]).parent.name)
-    return matches[0]
-
-
 # ============================================================
 # IMAGE LOADING
 # ============================================================
@@ -85,11 +77,11 @@ def find_first_preview_pair_in_session(pairs, session_name):
 def load_image_pair(rgb_path, thermal_path):
     rgb = tf.io.read_file(rgb_path)
     rgb = tf.image.decode_png(rgb, channels=3)
-    rgb = tf.image.convert_image_dtype(rgb, tf.float32)
+    rgb = tf.image.convert_image_dtype(rgb, tf.float32)  # [0,1]
 
     thermal = tf.io.read_file(thermal_path)
     thermal = tf.image.decode_png(thermal, channels=1)
-    thermal = tf.image.convert_image_dtype(thermal, tf.float32)
+    thermal = tf.image.convert_image_dtype(thermal, tf.float32)  # [0,1]
 
     rgb = tf.image.resize(rgb, [IMG_HEIGHT, IMG_WIDTH], method=tf.image.ResizeMethod.BILINEAR)
     thermal = tf.image.resize(thermal, [IMG_HEIGHT, IMG_WIDTH], method=tf.image.ResizeMethod.BILINEAR)
@@ -99,21 +91,37 @@ def load_image_pair(rgb_path, thermal_path):
 
     return rgb, thermal
 
+def random_jitter(rgb, thermal):
+    resize_h = int(IMG_HEIGHT * 1.05)
+    resize_w = int(IMG_WIDTH * 1.05)
+
+    rgb = tf.image.resize(rgb, [resize_h, resize_w], method=tf.image.ResizeMethod.BILINEAR)
+    thermal = tf.image.resize(thermal, [resize_h, resize_w], method=tf.image.ResizeMethod.BILINEAR)
+
+    stacked = tf.concat([rgb, thermal], axis=-1)
+    stacked = tf.image.random_crop(stacked, size=[IMG_HEIGHT, IMG_WIDTH, 4])
+
+    rgb = stacked[:, :, :3]
+    thermal = stacked[:, :, 3:]
+
+    if tf.random.uniform(()) > 0.5:
+        rgb = tf.image.flip_left_right(rgb)
+        thermal = tf.image.flip_left_right(thermal)
+
+    return rgb, thermal
 
 def load_train_image(rgb_path, thermal_path):
     rgb, thermal = load_image_pair(rgb_path, thermal_path)
+    # rgb, thermal = random_jitter(rgb, thermal)  # disabled for now
     return rgb, thermal
-
 
 def load_test_image(rgb_path, thermal_path):
     rgb, thermal = load_image_pair(rgb_path, thermal_path)
     return rgb, thermal
 
-
 def build_datasets(pair_list, split_ratio=0.9):
     n_total = len(pair_list)
     n_train = max(1, int(n_total * split_ratio))
-
     train_pairs = pair_list[:n_train]
     test_pairs = pair_list[n_train:] if n_total > 1 else pair_list[:1]
 
@@ -136,9 +144,8 @@ def build_datasets(pair_list, split_ratio=0.9):
 
     return train_ds, test_ds, train_pairs, test_pairs
 
-
 # ============================================================
-# MODEL
+# MODEL BUILDING BLOCKS
 # ============================================================
 
 def downsample(filters, size, apply_batchnorm=True):
@@ -152,7 +159,7 @@ def downsample(filters, size, apply_batchnorm=True):
             strides=2,
             padding="same",
             kernel_initializer=initializer,
-            use_bias=not apply_batchnorm,
+            use_bias=not apply_batchnorm
         )
     )
 
@@ -161,7 +168,6 @@ def downsample(filters, size, apply_batchnorm=True):
 
     result.add(layers.LeakyReLU())
     return result
-
 
 def upsample(filters, size, apply_dropout=False):
     initializer = tf.random_normal_initializer(0.0, 0.02)
@@ -174,7 +180,7 @@ def upsample(filters, size, apply_dropout=False):
             strides=2,
             padding="same",
             kernel_initializer=initializer,
-            use_bias=False,
+            use_bias=False
         )
     )
 
@@ -185,7 +191,6 @@ def upsample(filters, size, apply_dropout=False):
 
     result.add(layers.ReLU())
     return result
-
 
 def Generator():
     inputs = layers.Input(shape=[IMG_HEIGHT, IMG_WIDTH, 3])
@@ -211,12 +216,11 @@ def Generator():
 
     initializer = tf.random_normal_initializer(0.0, 0.02)
     last = layers.Conv2DTranspose(
-        1,
-        4,
+        1, 4,
         strides=2,
         padding="same",
         kernel_initializer=initializer,
-        activation="tanh",
+        activation="tanh"
     )
 
     x = inputs
@@ -235,7 +239,7 @@ def Generator():
             x = layers.Resizing(
                 height=skip.shape[1],
                 width=skip.shape[2],
-                interpolation="bilinear",
+                interpolation="bilinear"
             )(x)
 
         x = layers.Concatenate()([x, skip])
@@ -246,11 +250,10 @@ def Generator():
         x = layers.Resizing(
             height=IMG_HEIGHT,
             width=IMG_WIDTH,
-            interpolation="bilinear",
+            interpolation="bilinear"
         )(x)
 
     return tf.keras.Model(inputs=inputs, outputs=x)
-
 
 def Discriminator():
     initializer = tf.random_normal_initializer(0.0, 0.02)
@@ -266,27 +269,40 @@ def Discriminator():
 
     zero_pad1 = layers.ZeroPadding2D()(down3)
     conv = layers.Conv2D(
-        512,
-        4,
-        strides=1,
+        512, 4, strides=1,
         kernel_initializer=initializer,
-        use_bias=False,
+        use_bias=False
     )(zero_pad1)
 
     batchnorm1 = layers.BatchNormalization()(conv)
     leaky_relu = layers.LeakyReLU()(batchnorm1)
 
     zero_pad2 = layers.ZeroPadding2D()(leaky_relu)
-    last = layers.Conv2D(1, 4, strides=1, kernel_initializer=initializer)(zero_pad2)
+
+    last = layers.Conv2D(
+        1, 4, strides=1,
+        kernel_initializer=initializer
+    )(zero_pad2)
 
     return tf.keras.Model(inputs=[inp, tar], outputs=last)
-
 
 # ============================================================
 # LOSSES / OPTIMIZERS
 # ============================================================
 
 loss_object = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+
+def generator_loss(disc_generated_output, gen_output, target):
+    gan_loss = loss_object(tf.ones_like(disc_generated_output), disc_generated_output)
+    l1_loss = tf.reduce_mean(tf.abs(target - gen_output))
+    total_gen_loss = gan_loss + (LAMBDA * l1_loss)
+    return total_gen_loss, gan_loss, l1_loss
+
+def discriminator_loss(disc_real_output, disc_generated_output):
+    real_loss = loss_object(tf.ones_like(disc_real_output), disc_real_output)
+    generated_loss = loss_object(tf.zeros_like(disc_generated_output), disc_generated_output)
+    total_disc_loss = real_loss + generated_loss
+    return total_disc_loss
 
 generator = Generator()
 discriminator = Discriminator()
@@ -298,28 +314,11 @@ checkpoint = tf.train.Checkpoint(
     generator_optimizer=generator_optimizer,
     discriminator_optimizer=discriminator_optimizer,
     generator=generator,
-    discriminator=discriminator,
+    discriminator=discriminator
 )
 
 checkpoint_prefix = os.path.join(CHECKPOINT_DIR, "ckpt")
 summary_writer = tf.summary.create_file_writer(LOG_DIR)
-
-global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
-
-
-def generator_loss(disc_generated_output, gen_output, target):
-    gan_loss = loss_object(tf.ones_like(disc_generated_output), disc_generated_output)
-    l1_loss = tf.reduce_mean(tf.abs(target - gen_output))
-    total_gen_loss = gan_loss + (LAMBDA * l1_loss)
-    return total_gen_loss, gan_loss, l1_loss
-
-
-def discriminator_loss(disc_real_output, disc_generated_output):
-    real_loss = loss_object(tf.ones_like(disc_real_output), disc_real_output)
-    generated_loss = loss_object(tf.zeros_like(disc_generated_output), disc_generated_output)
-    total_disc_loss = real_loss + generated_loss
-    return total_disc_loss
-
 
 # ============================================================
 # VISUALIZATION
@@ -327,7 +326,6 @@ def discriminator_loss(disc_real_output, disc_generated_output):
 
 def denorm(x):
     return (x + 1.0) / 2.0
-
 
 def save_sample(epoch, test_input, target, prediction):
     os.makedirs(SAMPLE_DIR, exist_ok=True)
@@ -340,6 +338,8 @@ def save_sample(epoch, test_input, target, prediction):
     inp_vis = tf.image.adjust_brightness(inp_vis, delta=0.08)
     inp_vis = tf.clip_by_value(inp_vis, 0.0, 1.0)
 
+    if inp_vis.shape[-1] == 1:
+        inp_vis = tf.image.grayscale_to_rgb(inp_vis)
     tar = tf.image.grayscale_to_rgb(tar)
     pred = tf.image.grayscale_to_rgb(pred)
 
@@ -352,18 +352,18 @@ def save_sample(epoch, test_input, target, prediction):
     out_path = os.path.join(SAMPLE_DIR, f"epoch_{epoch:04d}.png")
     tf.keras.utils.save_img(out_path, stacked)
 
-    tf.keras.utils.save_img(os.path.join(SAMPLE_DIR, f"epoch_{epoch:04d}_rgb.png"), inp_vis)
-    tf.keras.utils.save_img(os.path.join(SAMPLE_DIR, f"epoch_{epoch:04d}_pred.png"), pred)
+    rgb_out_path = os.path.join(SAMPLE_DIR, f"epoch_{epoch:04d}_rgb.png")
+    tf.keras.utils.save_img(rgb_out_path, inp_vis)
 
+    pred_out_path = os.path.join(SAMPLE_DIR, f"epoch_{epoch:04d}_pred.png")
+    tf.keras.utils.save_img(pred_out_path, pred)
 
 # ============================================================
 # TRAIN STEP
 # ============================================================
 
 @tf.function(jit_compile=False)
-def train_step(input_image, target):
-    global_step.assign_add(1)
-
+def train_step(input_image, target, epoch):
     with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
         gen_output = generator(input_image, training=True)
 
@@ -371,9 +371,7 @@ def train_step(input_image, target):
         disc_generated_output = discriminator([input_image, gen_output], training=True)
 
         total_gen_loss, gan_loss, l1_loss = generator_loss(
-            disc_generated_output,
-            gen_output,
-            target,
+            disc_generated_output, gen_output, target
         )
         disc_loss = discriminator_loss(disc_real_output, disc_generated_output)
 
@@ -384,13 +382,12 @@ def train_step(input_image, target):
     discriminator_optimizer.apply_gradients(zip(discriminator_gradients, discriminator.trainable_variables))
 
     with summary_writer.as_default():
-        tf.summary.scalar("gen_total_loss", total_gen_loss, step=global_step)
-        tf.summary.scalar("gen_gan_loss", gan_loss, step=global_step)
-        tf.summary.scalar("gen_l1_loss", l1_loss, step=global_step)
-        tf.summary.scalar("disc_loss", disc_loss, step=global_step)
+        tf.summary.scalar("gen_total_loss", total_gen_loss, step=epoch)
+        tf.summary.scalar("gen_gan_loss", gan_loss, step=epoch)
+        tf.summary.scalar("gen_l1_loss", l1_loss, step=epoch)
+        tf.summary.scalar("disc_loss", disc_loss, step=epoch)
 
     return total_gen_loss, gan_loss, l1_loss, disc_loss
-
 
 # ============================================================
 # TRAIN LOOP
@@ -399,15 +396,13 @@ def train_step(input_image, target):
 def fit(train_ds, test_ds, epochs, preview_pair=None):
     if preview_pair is not None:
         rgb_path, thermal_path = preview_pair
-        print("Using fixed preview pair:")
-        print("  RGB    :", rgb_path)
-        print("  Thermal:", thermal_path)
-
         rgb, thermal = load_test_image(rgb_path, thermal_path)
         example_input = tf.expand_dims(rgb, axis=0)
         example_target = tf.expand_dims(thermal, axis=0)
+        print(f"Preview RGB path: {rgb_path}")
+        print(f"Preview thermal path: {thermal_path}")
     else:
-        print("Using first test sample for preview.")
+        print("Preview pair missing; using first test sample.")
         example_input, example_target = next(iter(test_ds))
 
     for epoch in range(epochs):
@@ -416,7 +411,9 @@ def fit(train_ds, test_ds, epochs, preview_pair=None):
         print(f"\nEpoch {epoch + 1}/{epochs}")
 
         for n, (input_image, target) in train_ds.enumerate():
-            total_gen_loss, gan_loss, l1_loss, disc_loss = train_step(input_image, target)
+            total_gen_loss, gan_loss, l1_loss, disc_loss = train_step(
+                input_image, target, epoch
+            )
 
             if int(n) % 50 == 0:
                 print(
@@ -428,7 +425,6 @@ def fit(train_ds, test_ds, epochs, preview_pair=None):
                 )
 
         prediction = generator(example_input, training=False)
-
         print(
             "pred range:",
             float(tf.reduce_min(prediction)),
@@ -437,7 +433,6 @@ def fit(train_ds, test_ds, epochs, preview_pair=None):
             float(tf.reduce_min(example_target)),
             float(tf.reduce_max(example_target)),
         )
-
         print(
             "pred mean:",
             float(tf.reduce_mean(prediction)),
@@ -455,7 +450,6 @@ def fit(train_ds, test_ds, epochs, preview_pair=None):
     saved_path = checkpoint.save(file_prefix=checkpoint_prefix)
     print(f"Final checkpoint saved: {saved_path}")
 
-
 # ============================================================
 # MAIN
 # ============================================================
@@ -471,14 +465,14 @@ def main():
     if len(pairs) == 0:
         raise RuntimeError(
             f"No valid pairs found under {DATASET_ROOT}. "
-            "Expected each pair folder to contain input_rgb.png and thermal_gray.png"
+            f"Expected each pair folder to contain input_rgb.png and thermal_gray.png"
         )
 
     _, sample_th = load_test_image(*pairs[0])
     print(
         "sample thermal min/max:",
         float(tf.reduce_min(sample_th)),
-        float(tf.reduce_max(sample_th)),
+        float(tf.reduce_max(sample_th))
     )
 
     train_ds, test_ds, train_pairs, test_pairs = build_datasets(pairs)
@@ -486,18 +480,26 @@ def main():
     print(f"Train pairs: {len(train_pairs)}")
     print(f"Test pairs:  {len(test_pairs)}")
 
+    if tf.io.gfile.exists(RESTORE_PATH + ".index"):
+        checkpoint.restore(RESTORE_PATH)
+        print(f"Restored checkpoint: {RESTORE_PATH}")
+    else:
+        print(f"Checkpoint not found: {RESTORE_PATH}")
+        print("Starting from scratch.")
+
     preview_pair = find_first_preview_pair_in_session(
         pairs,
-        session_name=PREVIEW_SESSION,
+        session_name=PREVIEW_SESSION
     )
 
-    if preview_pair is None:
-        print("Requested preview session not found; using first test sample.")
-
-    print("Starting training from scratch. No checkpoint restored.")
+    if preview_pair is not None:
+        print("Using preview pair:")
+        print("  RGB    :", preview_pair[0])
+        print("  Thermal:", preview_pair[1])
+    else:
+        print("Warning: requested session not found, using first test sample.")
 
     fit(train_ds, test_ds, EPOCHS, preview_pair=preview_pair)
-
 
 if __name__ == "__main__":
     main()

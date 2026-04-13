@@ -11,7 +11,7 @@ import numpy as np
 # ============================================================
 
 DATASET_ROOT = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/RGB Thermal Dataset")
-OUT_DIR = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/processed_640x480")
+OUT_DIR = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/training_processed_640x480")
 OUT_MANIFEST = OUT_DIR / "manifest.csv"
 
 TARGET_W = 640
@@ -36,10 +36,10 @@ RGB_TY = 0
 # Thermal transform knobs
 # ------------------------------------------------------------
 THERMAL_SCALE_X = 1.4
-THERMAL_SCALE_Y = 1.4
+THERMAL_SCALE_Y = 1.3
 THERMAL_ROT_DEG = 0.0
-THERMAL_TX = 40
-THERMAL_TY = 0
+THERMAL_TX = 60
+THERMAL_TY = 20
 
 # ------------------------------------------------------------
 # Optional center crop before transform/resize
