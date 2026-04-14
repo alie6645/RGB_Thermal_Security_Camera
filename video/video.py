@@ -7,8 +7,11 @@ from unet.unet_model import UNet
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def preprocess_frame(frame_bgr):
-    # Resize to 320x240 (width x height)
-    frame_bgr = cv2.resize(frame_bgr, (320, 240))
+    width = 200
+    height = 200
+
+    # Resize to (width x height)
+    frame_bgr = cv2.resize(frame_bgr, (200, 200))
 
     # BGR → RGB
     img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -16,7 +19,7 @@ def preprocess_frame(frame_bgr):
     # To tensor in [0,1], shape [3,H,W]
     tensor = F.to_tensor(img_rgb)  # already [0,1] float32
 
-    # Add batch dimension: [1,3,240,320]
+    # Add batch dimension (expected by model):
     return tensor.unsqueeze(0).to(device)
 
 def postprocess_tensor(tensor):
@@ -24,10 +27,10 @@ def postprocess_tensor(tensor):
     tensor = tensor.clamp(0.0, 1.0)
 
     # Remove batch dimension
-    img = tensor.squeeze(0).cpu()  # [3,240,320]
+    img = tensor.squeeze(0).cpu()
 
     # To HWC uint8
-    img = F.to_pil_image(img)      # PIL RGB
+    img = F.to_pil_image(img)
     img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
     return img
 
@@ -49,11 +52,11 @@ def main(model, file):
         inp = preprocess_frame(frame)
 
         with torch.no_grad():
-            out = model(inp)  # expects [1,3,240,320] in [0,1]
+            out = model(inp) 
 
         out_frame = postprocess_tensor(out)
 
-        cv2.imshow("Custom 320x240 I2I", out_frame)
+        cv2.imshow("RGB to Thermal", out_frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
