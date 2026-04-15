@@ -6,12 +6,12 @@ from unet.unet_model import UNet
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def preprocess_frame(frame_bgr):
+def preprocess_frame(frame_bgr, size):
     width = 200
     height = 200
 
     # Resize to (width x height)
-    frame_bgr = cv2.resize(frame_bgr, (200, 200))
+    frame_bgr = cv2.resize(frame_bgr, size)
 
     # BGR → RGB
     img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -37,10 +37,11 @@ def postprocess_tensor(tensor):
 import numpy as np
 import os
 
-def main(model, file):
+def main(model, file, size):
     # Your model
     model = model.to(device).eval()
-    model.load_state_dict(torch.load(os.path.join("models", file), map_location=device))
+    size_name = str(size[0]) + "x" + str(size[1])
+    model.load_state_dict(torch.load(os.path.join("models", size_name, file), map_location=device))
 
     cap = cv2.VideoCapture(0)
 
@@ -49,7 +50,7 @@ def main(model, file):
         if not ret:
             break
 
-        inp = preprocess_frame(frame)
+        inp = preprocess_frame(frame, size)
 
         with torch.no_grad():
             out = model(inp) 
@@ -66,10 +67,26 @@ def main(model, file):
 import sys
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("usage: " + sys.argv[0] + " model_type[\'n\' or \'u\'] model_size[\'s\' or \'l\']")
+        sys.exit()
+    
     model_type = sys.argv[1]
     if model_type == 'n':
-        main(NAFNet(), "naf.pth")
+        model_type = NAFNet()
+        file = "naf.pth"
     elif model_type == 'u':
-        main(UNet(3, 1), "unet.pth")
+        model_type = UNet(3, 1)
+        file = "unet.pth"
     else:
-        print("options: n -> NAFNet, u -> UNet")
+        print("model type options: n -> NAFNet, u -> UNet")
+    
+    model_size = sys.argv[2]
+    if model_size == 's':
+        model_size = (200, 200)
+    elif model_size == 'l':
+        model_size = (400, 400)
+    else:
+        print("model size options: s -> 200 x 200, l -> 400 x 400")
+
+    main(model_type, file, model_size)
