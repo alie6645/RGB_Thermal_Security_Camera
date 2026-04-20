@@ -13,7 +13,7 @@ tf.config.optimizer.set_jit(False)
 DATASET_ROOT = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/test_processed_640x480")
 
 # Folder containing the trained checkpoints you want to use
-CHECKPOINT_DIR = "./training_checkpoints_rgb_to_thermal_resume_every_epoch"
+CHECKPOINT_DIR = "./training_checkpoints_rgb_to_thermal_from_scratch_v2"
 
 # Where predicted thermal images will be saved
 OUTPUT_DIR = "./inference_outputs"
@@ -296,7 +296,7 @@ def run_inference(rgb_files):
 def main():
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
-    restore_path = "./training_checkpoints_rgb_to_thermal_resume_every_epoch/ckpt-49"
+    restore_path = "./training_checkpoints_rgb_to_thermal_from_scratch_v2/ckpt-21"
 
     if not tf.io.gfile.exists(restore_path + ".index"):
         raise RuntimeError(f"Checkpoint not found: {restore_path}")
