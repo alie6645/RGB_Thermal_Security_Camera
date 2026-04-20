@@ -10,15 +10,14 @@ import numpy as np
 # CONFIG
 # ============================================================
 
-DATASET_ROOT = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/RGB Thermal Dataset")
-OUT_DIR = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/training_processed_640x480")
-OUT_MANIFEST = OUT_DIR / "manifest.csv"
+TEST_DATASET_ROOT = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/Test Set")
+TRAIN_DATASET_ROOT = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/RGB Thermal Dataset")
+
+TEST_OUT_DIR = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/test_processed_640x480")
+TRAIN_OUT_DIR = Path("/home/donpc/projects/RGB_Thermal_Security_Camera/training_processed_640x480")
 
 TARGET_W = 640
 TARGET_H = 480
-
-PREVIEW_LIMIT = 100
-ALPHAS = [0.60]
 
 RGB_NAME = "ov5642.jpg"
 THERMAL_NAME = "seek.png"
@@ -48,23 +47,24 @@ RGB_CENTER_CROP_FRAC = 1.0
 THERMAL_CENTER_CROP_FRAC = 1.0
 
 # ------------------------------------------------------------
-# Thermal normalization
+# Thermal normalization / contrast emphasis
 # ------------------------------------------------------------
 THERMAL_P_LOW = 1.0
 THERMAL_P_HIGH = 99.0
-
+THERMAL_GAMMA = 4  # < 1 brightens hotter regions
+THERMAL_BANDS = 48
 # ------------------------------------------------------------
-# Hot region preview threshold
+# Overlay preview
 # ------------------------------------------------------------
-HEAT_THRESH = 0.60
+OVERLAY_ALPHA = 0.60
 
 
 # ============================================================
 # UTILS
 # ============================================================
 
-def ensure_dirs():
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+def ensure_dirs(out_dir: Path):
+    out_dir.mkdir(parents=True, exist_ok=True)
 
 
 def find_pair_dirs(root: Path):
@@ -101,22 +101,30 @@ def center_crop_fraction(img: np.ndarray, frac: float) -> np.ndarray:
     return img[y0:y1, x0:x1]
 
 
-def apply_rgb_transform(img: np.ndarray) -> np.ndarray:
+def apply_affine_transform(
+    img: np.ndarray,
+    scale_x: float,
+    scale_y: float,
+    rot_deg: float,
+    tx: float,
+    ty: float,
+    border_value,
+) -> np.ndarray:
     h, w = img.shape[:2]
     center = (w / 2.0, h / 2.0)
 
-    M = cv2.getRotationMatrix2D(center, RGB_ROT_DEG, 1.0)
+    M = cv2.getRotationMatrix2D(center, rot_deg, 1.0)
 
-    M[0, 0] *= RGB_SCALE_X
-    M[0, 1] *= RGB_SCALE_X
-    M[1, 0] *= RGB_SCALE_Y
-    M[1, 1] *= RGB_SCALE_Y
+    M[0, 0] *= scale_x
+    M[0, 1] *= scale_x
+    M[1, 0] *= scale_y
+    M[1, 1] *= scale_y
 
     M[0, 2] += center[0] - (M[0, 0] * center[0] + M[0, 1] * center[1])
     M[1, 2] += center[1] - (M[1, 0] * center[0] + M[1, 1] * center[1])
 
-    M[0, 2] += RGB_TX
-    M[1, 2] += RGB_TY
+    M[0, 2] += tx
+    M[1, 2] += ty
 
     transformed = cv2.warpAffine(
         img,
@@ -124,37 +132,33 @@ def apply_rgb_transform(img: np.ndarray) -> np.ndarray:
         (w, h),
         flags=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0),
+        borderValue=border_value,
     )
     return transformed
+
+
+def apply_rgb_transform(img: np.ndarray) -> np.ndarray:
+    return apply_affine_transform(
+        img,
+        scale_x=RGB_SCALE_X,
+        scale_y=RGB_SCALE_Y,
+        rot_deg=RGB_ROT_DEG,
+        tx=RGB_TX,
+        ty=RGB_TY,
+        border_value=(0, 0, 0),
+    )
 
 
 def apply_thermal_transform(img: np.ndarray) -> np.ndarray:
-    h, w = img.shape[:2]
-    center = (w / 2.0, h / 2.0)
-
-    M = cv2.getRotationMatrix2D(center, THERMAL_ROT_DEG, 1.0)
-
-    M[0, 0] *= THERMAL_SCALE_X
-    M[0, 1] *= THERMAL_SCALE_X
-    M[1, 0] *= THERMAL_SCALE_Y
-    M[1, 1] *= THERMAL_SCALE_Y
-
-    M[0, 2] += center[0] - (M[0, 0] * center[0] + M[0, 1] * center[1])
-    M[1, 2] += center[1] - (M[1, 0] * center[0] + M[1, 1] * center[1])
-
-    M[0, 2] += THERMAL_TX
-    M[1, 2] += THERMAL_TY
-
-    transformed = cv2.warpAffine(
+    return apply_affine_transform(
         img,
-        M,
-        (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
+        scale_x=THERMAL_SCALE_X,
+        scale_y=THERMAL_SCALE_Y,
+        rot_deg=THERMAL_ROT_DEG,
+        tx=THERMAL_TX,
+        ty=THERMAL_TY,
+        border_value=0,
     )
-    return transformed
 
 
 def resize_rgb(img: np.ndarray) -> np.ndarray:
@@ -176,7 +180,18 @@ def normalize_thermal(img: np.ndarray) -> np.ndarray:
 
     out = (img_f - lo) / (hi - lo)
     out = np.clip(out, 0.0, 1.0)
-    return out
+
+    out = np.power(out, THERMAL_GAMMA).astype(np.float32)
+
+    # custom uneven thermal bands
+    band_edges = np.array([0.00, 0.05, 0.12, 0.22, 0.35, 0.50, 0.68, 0.82, 0.92, 1.00], dtype=np.float32)
+    band_values = np.array([0.00, 0.04, 0.10, 0.18, 0.30, 0.46, 0.64, 0.80, 0.92, 1.00], dtype=np.float32)
+
+    idx = np.digitize(out, band_edges, right=True)
+    idx = np.clip(idx, 0, len(band_values) - 1)
+    out = band_values[idx]
+
+    return np.clip(out, 0.0, 1.0)
 
 
 def thermal_to_u8(thermal_norm: np.ndarray) -> np.ndarray:
@@ -193,10 +208,6 @@ def blend_overlay(rgb_bgr: np.ndarray, thermal_color: np.ndarray, alpha: float) 
 
 
 def brighten_rgb_shadow_reveal(rgb_bgr: np.ndarray) -> np.ndarray:
-    """
-    Brighten dark areas in the RGB image to try to reveal people/shadows
-    that correspond to dark blobs or hidden detail.
-    """
     hsv = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
     h, s, v = cv2.split(hsv)
 
@@ -216,13 +227,18 @@ def brighten_rgb_shadow_reveal(rgb_bgr: np.ndarray) -> np.ndarray:
 
     return cv2.cvtColor(hsv_out, cv2.COLOR_HSV2BGR)
 
-def make_pair_output_dir(session_name: str, pair_name: str) -> Path:
-    pair_out_dir = OUT_DIR / session_name / pair_name
+
+def make_pair_output_dir(out_dir: Path, session_name: str, pair_name: str) -> Path:
+    pair_out_dir = out_dir / session_name / pair_name
     pair_out_dir.mkdir(parents=True, exist_ok=True)
     return pair_out_dir
 
 
-def process_pair_dir(pair_dir: Path, idx: int):
+# ============================================================
+# PROCESSING
+# ============================================================
+
+def process_pair_dir(pair_dir: Path, out_dir: Path):
     rgb_path = pair_dir / RGB_NAME
     thermal_path = pair_dir / THERMAL_NAME
 
@@ -251,11 +267,11 @@ def process_pair_dir(pair_dir: Path, idx: int):
     thermal_color = thermal_colormap(thermal_norm)
 
     bright_rgb = brighten_rgb_shadow_reveal(rgb_resized)
-    overlap = blend_overlay(rgb_resized, thermal_color, ALPHAS[0])
+    overlap = blend_overlay(rgb_resized, thermal_color, OVERLAY_ALPHA)
 
     session_name = pair_dir.parent.name
     pair_name = pair_dir.name
-    pair_out_dir = make_pair_output_dir(session_name, pair_name)
+    pair_out_dir = make_pair_output_dir(out_dir, session_name, pair_name)
 
     input_rgb_out = pair_out_dir / "input_rgb.png"
     ground_truth_overlap_out = pair_out_dir / "ground_truth_overlap.png"
@@ -286,8 +302,8 @@ def process_pair_dir(pair_dir: Path, idx: int):
     }
 
 
-def write_manifest(rows):
-    with open(OUT_MANIFEST, "w", newline="", encoding="utf-8") as f:
+def write_manifest(rows, manifest_path: Path):
+    with open(manifest_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
             fieldnames=[
@@ -310,31 +326,38 @@ def write_manifest(rows):
         writer.writerows(rows)
 
 
-def main():
-    ensure_dirs()
-    pair_dirs = find_pair_dirs(DATASET_ROOT)
+def process_dataset(dataset_root: Path, out_dir: Path, label: str):
+    ensure_dirs(out_dir)
+    pair_dirs = find_pair_dirs(dataset_root)
 
-    print(f"Found {len(pair_dirs)} pair directories under {DATASET_ROOT}")
+    print(f"\n[{label}] Found {len(pair_dirs)} pair directories under {dataset_root}")
 
     rows = []
     failures = 0
 
     for idx, pair_dir in enumerate(pair_dirs):
         try:
-            row = process_pair_dir(pair_dir, idx)
+            row = process_pair_dir(pair_dir, out_dir)
             rows.append(row)
             if (idx + 1) % 50 == 0:
-                print(f"Processed {idx + 1}/{len(pair_dirs)}")
+                print(f"[{label}] Processed {idx + 1}/{len(pair_dirs)}")
         except Exception as e:
             failures += 1
-            print(f"[FAIL] {pair_dir}: {e}")
+            print(f"[{label}] [FAIL] {pair_dir}: {e}")
 
-    write_manifest(rows)
+    manifest_path = out_dir / "manifest.csv"
+    write_manifest(rows, manifest_path)
 
-    print("Done.")
-    print(f"Successful: {len(rows)}")
-    print(f"Failed: {failures}")
-    print(f"Outputs written to: {OUT_DIR.resolve()}")
+    print(f"[{label}] Done.")
+    print(f"[{label}] Successful: {len(rows)}")
+    print(f"[{label}] Failed: {failures}")
+    print(f"[{label}] Outputs written to: {out_dir.resolve()}")
+    print(f"[{label}] Manifest written to: {manifest_path.resolve()}")
+
+
+def main():
+    process_dataset(TRAIN_DATASET_ROOT, TRAIN_OUT_DIR, "TRAIN")
+    process_dataset(TEST_DATASET_ROOT, TEST_OUT_DIR, "TEST")
 
 
 if __name__ == "__main__":

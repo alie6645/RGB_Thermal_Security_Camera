@@ -29,13 +29,21 @@ CHECKPOINT_DIR = "./training_checkpoints_rgb_to_thermal_from_scratch_v2"
 LOG_DIR = "./logs_rgb_to_thermal_from_scratch_v2"
 SAMPLE_DIR = "./samples_rgb_to_thermal_from_scratch_v2"
 
-AUTOTUNE = tf.data.AUTOTUNE
+AUTOTUNE = 4
 SHUFFLE_PAIRS = True
 
 # Change this if you want a specific session for preview.
 # Set to None to use the first test sample.
 PREVIEW_SESSION = "session_20260317_201336"
 
+def gradient_loss(y_true, y_pred):
+    dy_true, dx_true = tf.image.image_gradients(y_true)
+    dy_pred, dx_pred = tf.image.image_gradients(y_pred)
+
+    return (
+        tf.reduce_mean(tf.abs(dy_true - dy_pred)) +
+        tf.reduce_mean(tf.abs(dx_true - dx_pred))
+    )
 
 # ============================================================
 # FILE DISCOVERY
@@ -126,11 +134,13 @@ def build_datasets(pair_list, split_ratio=0.9):
     train_ds = tf.data.Dataset.from_tensor_slices((train_rgb, train_thermal))
     train_ds = train_ds.shuffle(min(len(train_pairs), BUFFER_SIZE))
     train_ds = train_ds.map(load_train_image, num_parallel_calls=AUTOTUNE)
+    train_ds = train_ds.apply(tf.data.experimental.ignore_errors())
     train_ds = train_ds.batch(BATCH_SIZE)
     train_ds = train_ds.prefetch(AUTOTUNE)
 
     test_ds = tf.data.Dataset.from_tensor_slices((test_rgb, test_thermal))
     test_ds = test_ds.map(load_test_image, num_parallel_calls=AUTOTUNE)
+    test_ds = test_ds.apply(tf.data.experimental.ignore_errors())
     test_ds = test_ds.batch(1)
     test_ds = test_ds.prefetch(AUTOTUNE)
 
@@ -310,8 +320,10 @@ global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
 def generator_loss(disc_generated_output, gen_output, target):
     gan_loss = loss_object(tf.ones_like(disc_generated_output), disc_generated_output)
     l1_loss = tf.reduce_mean(tf.abs(target - gen_output))
-    total_gen_loss = gan_loss + (LAMBDA * l1_loss)
-    return total_gen_loss, gan_loss, l1_loss
+    edge_loss = gradient_loss(target, gen_output)
+
+    total_gen_loss = gan_loss + (30.0 * l1_loss) + (0.5 * edge_loss)
+    return total_gen_loss, gan_loss, l1_loss, edge_loss
 
 
 def discriminator_loss(disc_real_output, disc_generated_output):
@@ -370,7 +382,7 @@ def train_step(input_image, target):
         disc_real_output = discriminator([input_image, target], training=True)
         disc_generated_output = discriminator([input_image, gen_output], training=True)
 
-        total_gen_loss, gan_loss, l1_loss = generator_loss(
+        total_gen_loss, gan_loss, l1_loss, edge_loss = generator_loss(
             disc_generated_output,
             gen_output,
             target,
@@ -389,7 +401,7 @@ def train_step(input_image, target):
         tf.summary.scalar("gen_l1_loss", l1_loss, step=global_step)
         tf.summary.scalar("disc_loss", disc_loss, step=global_step)
 
-    return total_gen_loss, gan_loss, l1_loss, disc_loss
+    return total_gen_loss, gan_loss, l1_loss, edge_loss, disc_loss
 
 
 # ============================================================
@@ -416,16 +428,17 @@ def fit(train_ds, test_ds, epochs, preview_pair=None):
         print(f"\nEpoch {epoch + 1}/{epochs}")
 
         for n, (input_image, target) in train_ds.enumerate():
-            total_gen_loss, gan_loss, l1_loss, disc_loss = train_step(input_image, target)
+            total_gen_loss, gan_loss, l1_loss, edge_loss, disc_loss = train_step(input_image, target)
 
             if int(n) % 50 == 0:
                 print(
-                    f"  step {int(n):04d} | "
-                    f"gen_total={total_gen_loss.numpy():.4f} | "
-                    f"gan={gan_loss.numpy():.4f} | "
-                    f"l1={l1_loss.numpy():.4f} | "
-                    f"disc={disc_loss.numpy():.4f}"
-                )
+                f"  step {int(n):04d} | "
+                f"gen_total={total_gen_loss.numpy():.4f} | "
+                f"gan={gan_loss.numpy():.4f} | "
+                f"l1={l1_loss.numpy():.4f} | "
+                f"edge={edge_loss.numpy():.4f} | "
+                f"disc={disc_loss.numpy():.4f}"
+            )
 
         prediction = generator(example_input, training=False)
 
@@ -447,8 +460,9 @@ def fit(train_ds, test_ds, epochs, preview_pair=None):
 
         save_sample(epoch + 1, example_input, example_target, prediction)
 
-        saved_path = checkpoint.save(file_prefix=checkpoint_prefix)
-        print(f"Saved checkpoint: {saved_path}")
+        if (epoch + 1) % 5 == 0:
+            saved_path = checkpoint.save(file_prefix=checkpoint_prefix)
+            print(f"Saved checkpoint: {saved_path}")
 
         print(f"Epoch {epoch + 1} completed in {time.time() - start:.2f} sec")
 
@@ -495,7 +509,6 @@ def main():
         print("Requested preview session not found; using first test sample.")
 
     print("Starting training from scratch. No checkpoint restored.")
-
     fit(train_ds, test_ds, EPOCHS, preview_pair=preview_pair)
 
 
