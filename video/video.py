@@ -44,22 +44,39 @@ def main(model, file, size):
     model.load_state_dict(torch.load(os.path.join("models", size_name, file), map_location=device))
 
     cap = cv2.VideoCapture(0)
+    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    crop_size = min(width, height)
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+        
+        # Square crop
+        h, w, _ = frame.shape
+        frame = frame[0: crop_size, 0: crop_size]
 
         inp = preprocess_frame(frame, size)
 
         with torch.no_grad():
-            out = model(inp) 
+            out = model(inp)
 
         out_frame = postprocess_tensor(out)
 
-        cv2.imshow("RGB to Thermal", out_frame)
+        # --- SIDE BY SIDE VIEW ---
+        h = min(frame.shape[0], out_frame.shape[0])
+        frame_resized = cv2.resize(frame, (int(frame.shape[1] * h / frame.shape[0]), h))
+        out_resized = cv2.resize(out_frame, (int(out_frame.shape[1] * h / out_frame.shape[0]), h))
+
+        combined = np.hstack((frame_resized, out_resized))
+
+        cv2.imshow("Original (Left) | Thermal (Right)", combined)
+        # --------------------------
+
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+
 
     cap.release()
     cv2.destroyAllWindows()
