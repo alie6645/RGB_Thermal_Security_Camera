@@ -2,17 +2,12 @@ import time
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from ExperimentData import ExperimentDataset
-import torchvision.transforms as transforms
+import Datasets
 from unet.unet_model import UNet
 
-data = ExperimentDataset(
-"olddata\\dataset_1-6-2024\\class1",
-"olddata\\dataset_1-6-2024\\class2",
-len=10000
-)
+data = Datasets.data_bright_train
 
-batchsize = 50
+batchsize = 5
 epochs = 10
 
 loader = DataLoader(data, batch_size=batchsize, shuffle=True)
@@ -26,11 +21,14 @@ device = torch.accelerator.current_accelerator().type if torch.accelerator.is_av
 print(f"Using {device} device")
 
 model = UNet(3, 1).to(device)
-model.load_state_dict(torch.load("model.pth", weights_only=True))
+try:
+    model.load_state_dict(torch.load("unet.pth", weights_only=True))
+except:
+    print("new model")
 print(model)
 
 loss_fn = nn.L1Loss()
-optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
 
 def train(dataloader, model, loss_fn, optimizer):
     size = len(dataloader.dataset)
@@ -47,7 +45,7 @@ def train(dataloader, model, loss_fn, optimizer):
         optimizer.step()
         optimizer.zero_grad()
 
-        if batch % 100 == 0:  
+        if batch % 10 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
@@ -57,7 +55,7 @@ for t in range(epochs):
     train(loader, model, loss_fn, optimizer)
 print("Done!")
 end = time.time()
-print("time elapsed: " + (end - start) + " s") 
+print("time elapsed: " + str(end - start) + " s")
 
-torch.save(model.state_dict(), "model.pth")
-print("Saved Model to model.pth")
+torch.save(model.state_dict(), "unet.pth")
+print("Saved Model to unet.pth")

@@ -1,18 +1,14 @@
 import torch
+import Datasets
 from torch import nn
 from torch.utils.data import DataLoader
-from ExperimentData import ExperimentDataset
-import torchvision.transforms as transforms
+from torchvision.transforms import v2
 from nafnet.NAFNet_arch import NAFNet
 
-data = ExperimentDataset(
-"olddata\\dataset_1-6-2024\\class1",
-"olddata\\dataset_1-6-2024\\class2",
-len=10000
-)
+data = Datasets.data_bright_train
 
-epochs = 10
-batchsize=50
+epochs = 50
+batchsize = 30
 loader = DataLoader(data, batch_size=batchsize, shuffle=True)
 
 for X, y in loader:
@@ -31,7 +27,7 @@ except:
 print(model)
 
 loss_fn = nn.L1Loss()
-optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
 
 def train(dataloader, model, loss_fn, optimizer):
     size = len(dataloader.dataset)
@@ -48,7 +44,7 @@ def train(dataloader, model, loss_fn, optimizer):
         optimizer.step()
         optimizer.zero_grad()
 
-        if batch % 100 == 0:  
+        if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
@@ -57,5 +53,6 @@ for t in range(epochs):
     train(loader, model, loss_fn, optimizer)
 print("Done!")
 
+model = model.to("cpu")
 torch.save(model.state_dict(), "naf.pth")
 print("Saved Model to naf.pth")

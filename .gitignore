@@ -1,5 +1,6 @@
 dataset_1-6-2024/
 *.pth
+*.mp4
 small/
 RGB Thermal Dataset/
 training_checkpoints/
