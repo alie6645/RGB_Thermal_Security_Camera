@@ -34,8 +34,8 @@ Next, obtain ip address from router or hotspot and run "ssh dietpi@{ip address}"
 
 default credentials are username: dietpi, password: thermal.
 
-can begin collecting data but using command .~/thermal/sync_capture_200.sh shell script.
-can run demo script using .~/thermal/video_to_thermal.sh shell script.
+can begin collecting data but using command ./home/dietpi/thermal/sync_capture_200.sh shell script.
+can run demo script using ./home/dietpi/thermal/video_to_thermal.sh shell script.
 
 can copy off files over the network from the orange pi by using "scp -r dietpi@{ip address}:/path/to/folder C:/path/on/windows/to/folder"
 ---
