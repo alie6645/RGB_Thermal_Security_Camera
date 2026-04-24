@@ -68,11 +68,3 @@ RGB_Thermal_Security_Camera/
 └─── unet/
     └── UNet model experiments
 
-
-
-samples: example results
-
-
-
-video: code for video demos
-
